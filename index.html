@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maze Architect Pro - Specialized Solver</title>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- html2canvas for Image Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background: #cbd5e1; font-family: 'Inter', sans-serif; }
+        .no-select { user-select: none; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 10px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        
+        .context-menu {
+            position: fixed;
+            background: white;
+            border: 1px solid #94a3b8;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            padding: 6px;
+            z-index: 9999;
+            min-width: 200px;
+        }
+        .context-menu-item {
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: all 0.2s;
+            color: #1e293b;
+        }
+        .context-menu-item:hover { background: #f1f5f9; color: #4f46e5; }
+        .context-menu-divider { height: 1px; background: #e2e8f0; margin: 4px 0; }
+        .context-menu-header { font-size: 10px; font-weight: 800; color: #94a3b8; padding: 4px 12px; text-transform: uppercase; }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 34px;
+            height: 20px;
+        }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #cbd5e1;
+            transition: .4s;
+            border-radius: 20px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 14px; width: 14px;
+            left: 3px; bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider { background-color: #4f46e5; }
+        input:checked + .slider:before { transform: translateX(14px); }
+
+        .dragging-ghost {
+            pointer-events: none;
+            position: fixed;
+            z-index: 10000;
+            opacity: 0.8;
+            transform: translate(-50%, -50%);
+        }
+
+        .border-visual {
+            position: absolute;
+            pointer-events: none;
+            z-index: 45;
+        }
+
+        .tooltip {
+            position: relative;
+            display: inline-block;
+        }
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 120px;
+            background-color: #1e293b;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 8px;
+            position: absolute;
+            z-index: 1000;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -60px;
+            opacity: 0;
+            transition: opacity 0.2s ease-out 0s, visibility 0s 0.75s;
+            font-size: 11px;
+            pointer-events: none;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .modal-animate { animation: fadeIn 0.15s ease-out; }
+
+        /* Sidebar toggle position style */
+        .sidebar-toggle-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 51;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useRef } = React;
+
+        // --- Constants ---
+        const CELL_SIZE = 32;
+        const WALL_THICKNESS = 6;
+        const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1'];
+        const MOVE_RULES = { FREE: '自由移動', ICE: '氷マス', LEFT_ONLY: '左折のみ', RIGHT_ONLY: '右折のみ' };
+        const PATH_MODES = { SHORTEST: '最短経路', ALL_CELLS: '全マス通過' };
+        const STORAGE_KEY = 'maze_architect_pro_state';
+
+        // --- Lucide Icon Helper ---
+        const Icon = ({ name, size = 16, className = "", fill = "none" }) => {
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (iconRef.current && lucide.icons[name]) {
+                    lucide.createIcons({
+                        targets: [iconRef.current],
+                        icons: { [name]: lucide.icons[name] },
+                        attrs: { stroke: "currentColor", "stroke-width": 2, fill: fill, width: size, height: size }
+                    });
+                }
+            }, [name, size, fill]);
+            return <i ref={iconRef} data-lucide={name} className={className}></i>;
+        };
+
+        // --- Solver Engine ---
+        class MazeSolver {
+            constructor(grid, hWalls, vWalls, pairs, warps, options) {
+                this.grid = grid; this.hWalls = hWalls; this.vWalls = vWalls;
+                this.pairs = pairs; this.warps = warps; this.options = options;
+                this.height = grid.length; this.width = grid[0].length;
+            }
+            isWall(r, c) {
+                if (r < 0 || r >= this.height || c < 0 || c >= this.width) return true;
+                return this.grid[r][c].isWall;
+            }
+            hasBorder(r1, c1, r2, c2) {
+                if (r1 === r2) { const minC = Math.min(c1, c2); return this.vWalls[r1][minC + 1]; }
+                else { const minR = Math.min(r1, r2); return this.hWalls[minR + 1][c1]; }
+            }
+            getWarp(r, c) {
+                for (const warp of this.warps) {
+                    if (warp.a.r === r && warp.a.c === c) return warp.b;
+                    if (warp.b.r === r && warp.b.c === c) return warp.a;
+                }
+                return null;
+            }
+            solve() {
+                const results = {};
+                for (const pair of this.pairs) { if (!pair.start || !pair.goal) continue; results[pair.id] = this.solvePair(pair); }
+                return results;
+            }
+            solvePair(pair) {
+                const { start, goal, requiredCells, mode, moveRule } = pair;
+                const limit = this.options.maxSolutions || 5;
+                if (mode === PATH_MODES.SHORTEST) {
+                    return this.findAllShortestPathsSequence(start, goal, requiredCells, moveRule, limit);
+                } else {
+                    let solutions = [];
+                    this.dfs(start, goal, requiredCells, moveRule, mode, [], new Set(), solutions, limit);
+                    return solutions;
+                }
+            }
+            findAllShortestPathsSequence(start, goal, cps, moveRule, limit) {
+                let currentPaths = [[{ ...start, dir: null, jump: false, via: null }]];
+                const points = [...cps, goal];
+                for (const target of points) {
+                    let nextLevelPaths = [];
+                    for (const existingPath of currentPaths) {
+                        const lastPos = existingPath[existingPath.length - 1];
+                        const segments = this.bfsAllShortest(lastPos, target, moveRule, new Set(existingPath.map(p => `${p.r},${p.c}`)));
+                        if (segments.length === 0) continue;
+                        for (const seg of segments) {
+                            nextLevelPaths.push([...existingPath, ...seg.slice(1)]);
+                            if (nextLevelPaths.length >= limit * 2) break;
+                        }
+                    }
+                    currentPaths = nextLevelPaths.slice(0, limit);
+                    if (currentPaths.length === 0) return [];
+                }
+                return currentPaths;
+            }
+            bfsAllShortest(start, target, moveRule, globalVisited) {
+                const queue = [[{ ...start, dir: null, jump: false, via: null }]];
+                const distances = new Map();
+                distances.set(`${start.r},${start.c}`, 0);
+                let minLen = Infinity;
+                let results = [];
+                while (queue.length > 0) {
+                    const path = queue.shift();
+                    const curr = path[path.length - 1];
+                    const currentDist = this.getPathStepCount(path);
+                    if (currentDist > minLen) continue;
+                    if (curr.r === target.r && curr.c === target.c) {
+                        if (currentDist < minLen) { minLen = currentDist; results = [path]; }
+                        else if (currentDist === minLen) { results.push(path); }
+                        continue;
+                    }
+                    const neighbors = this.getNeighbors(curr, moveRule);
+                    for (const next of neighbors) {
+                        const key = `${next.r},${next.c}`;
+                        if (globalVisited.has(key) || path.some(p => p.r === next.r && p.c === next.c)) continue;
+                        const nextDist = currentDist + (next.stepCount || 1);
+                        const prevDist = distances.has(key) ? distances.get(key) : Infinity;
+                        if (nextDist <= prevDist && nextDist <= minLen) {
+                            distances.set(key, nextDist);
+                            queue.push([...path, next]);
+                        }
+                    }
+                }
+                return results;
+            }
+            getPathStepCount(path) {
+                let count = 0;
+                for (let i = 1; i < path.length; i++) { count += (path[i].stepCount || 1); }
+                return count;
+            }
+            dfs(curr, goal, cps, moveRule, mode, path, visited, solutions, limit) {
+                if (solutions.length >= limit) return;
+                const newPath = [...path, curr];
+                const posKey = `${curr.r},${curr.c}`;
+                if (curr.r === goal.r && curr.c === goal.c) {
+                    let cpIdx = 0;
+                    for (const p of newPath) { if (cpIdx < cps.length && p.r === cps[cpIdx].r && p.c === cps[cpIdx].c) { cpIdx++; } }
+                    const allCpsVisitedInOrder = (cpIdx === cps.length);
+                    const allCellsVisited = mode === PATH_MODES.ALL_CELLS ? this.checkAllCells(newPath) : true;
+                    if (allCpsVisitedInOrder && allCellsVisited) solutions.push(newPath);
+                    return;
+                }
+                visited.add(posKey);
+                const neighbors = this.getNeighbors(curr, moveRule);
+                for (const next of neighbors) {
+                    if (!visited.has(`${next.r},${next.c}`)) { this.dfs(next, goal, cps, moveRule, mode, newPath, visited, solutions, limit); }
+                }
+                visited.delete(posKey);
+            }
+            checkAllCells(path) {
+                const pathSet = new Set(path.map(p => `${p.r},${p.c}`));
+                for (let r = 0; r < this.height; r++) {
+                    for (let c = 0; c < this.width; c++) { if (!this.grid[r][c].isWall && !pathSet.has(`${r},${c}`)) return false; }
+                }
+                return true;
+            }
+            getNeighbors(curr, moveRule) {
+                const dirs = [{ dr: -1, dc: 0, name: 'up' }, { dr: 1, dc: 0, name: 'down' }, { dr: 0, dc: -1, name: 'left' }, { dr: 0, dc: 1, name: 'right' }];
+                let possibleDirs = dirs;
+                if (moveRule === MOVE_RULES.LEFT_ONLY && curr.dir) {
+                    const leftMap = { up: 'left', down: 'right', left: 'down', right: 'up' };
+                    possibleDirs = dirs.filter(d => d.name === curr.dir || d.name === leftMap[curr.dir]);
+                } else if (moveRule === MOVE_RULES.RIGHT_ONLY && curr.dir) {
+                    const rightMap = { up: 'right', down: 'left', left: 'up', right: 'down' };
+                    possibleDirs = dirs.filter(d => d.name === curr.dir || d.name === rightMap[curr.dir]);
+                }
+                const neighbors = [];
+                for (const d of possibleDirs) {
+                    let nr = curr.r + d.dr;
+                    let nc = curr.c + d.dc;
+                    if (this.isWall(nr, nc) || this.hasBorder(curr.r, curr.c, nr, nc)) continue;
+                    let stepCount = 1;
+                    if (moveRule === MOVE_RULES.ICE) {
+                        let lastR = nr, lastC = nc;
+                        while (true) {
+                            let nextR = lastR + d.dr, nextC = lastC + d.dc;
+                            if (this.isWall(nextR, nextC) || this.hasBorder(lastR, lastC, nextR, nextC)) break;
+                            lastR = nextR; lastC = nextC; stepCount++;
+                        }
+                        nr = lastR; nc = lastC;
+                    }
+                    const warpDest = this.getWarp(nr, nc);
+                    if (warpDest) { neighbors.push({ r: warpDest.r, c: warpDest.c, dir: d.name, jump: true, via: { r: nr, c: nc }, stepCount }); }
+                    else { neighbors.push({ r: nr, c: nc, dir: d.name, jump: false, via: null, stepCount }); }
+                }
+                return neighbors;
+            }
+        }
+
+        // --- Main App Component ---
+        function App() {
+            const [grid, setGrid] = useState([]);
+            const [hWalls, setHWalls] = useState([]);
+            const [vWalls, setVWalls] = useState([]);
+            const [pairs, setPairs] = useState([{ id: Date.now(), start: null, goal: null, requiredCells: [], color: COLORS[0], mode: PATH_MODES.SHORTEST, moveRule: MOVE_RULES.FREE }]);
+            const [labels, setLabels] = useState([]);
+            const [activePairIdx, setActivePairIdx] = useState(0);
+            const [warps, setWarps] = useState([]);
+            const [solverOptions, setSolverOptions] = useState({ maxSolutions: 5 });
+            const [solutions, setSolutions] = useState({});
+            const [statusMsg, setStatusMsg] = useState('');
+            const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+            const [dim, setDim] = useState({ w: 5, h: 5 });
+            const [targetDim, setTargetDim] = useState({ w: 5, h: 5 });
+            const [history, setHistory] = useState([]);
+            const [historyIdx, setHistoryIdx] = useState(-1);
+            const [viewTransform, setViewTransform] = useState({ x: 50, y: 50, scale: 1.5 });
+            const [isPanning, setIsPanning] = useState(false);
+            const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+            const [isDragging, setIsDragging] = useState(false);
+            const [dragType, setDragType] = useState(null); 
+            const [dragMode, setDragMode] = useState(null); 
+            const [pendingWarp, setPendingWarp] = useState(null);
+            const [contextMenu, setContextMenu] = useState(null); 
+            const [isAutoSolve, setIsAutoSolve] = useState(true);
+            const [editingLabel, setEditingLabel] = useState(null);
+            const [draggedAttr, setDraggedAttr] = useState(null);
+            const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+            const [isLoaded, setIsLoaded] = useState(false);
+
+            const clickTimer = useRef(null);
+            const pendingWallAction = useRef(null); 
+            const workspaceRef = useRef(null);
+            const mazeContainerRef = useRef(null);
+            const fileInputRef = useRef(null);
+
+            // --- Persistence ---
+            useEffect(() => {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                if (saved) {
+                    try {
+                        const data = JSON.parse(saved);
+                        setGrid(data.grid);
+                        setHWalls(data.hWalls);
+                        setVWalls(data.vWalls);
+                        setPairs(data.pairs);
+                        setWarps(data.warps);
+                        setLabels(data.labels || []);
+                        setDim(data.dim);
+                        setTargetDim(data.dim);
+                        setStatusMsg("データを復元しました");
+                    } catch (e) {
+                        console.error("Failed to load saved state", e);
+                        resetMaze(5, 5, true);
+                    }
+                } else {
+                    resetMaze(5, 5, true);
+                }
+                setIsLoaded(true);
+            }, []);
+
+            useEffect(() => {
+                if (isLoaded) {
+                    const state = { grid, hWalls, vWalls, pairs, warps, labels, dim };
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+                }
+            }, [grid, hWalls, vWalls, pairs, warps, labels, dim, isLoaded]);
+
+            const saveHistory = useCallback((currentData) => {
+                const state = currentData || { grid, hWalls, vWalls, pairs, warps, labels, dim };
+                const snapshot = JSON.stringify(state);
+                setHistory(prev => {
+                    const next = [...prev.slice(0, historyIdx + 1), snapshot];
+                    return next.slice(-50);
+                });
+                setHistoryIdx(prev => {
+                    const nextIdx = prev + 1;
+                    return nextIdx >= 50 ? 49 : nextIdx;
+                });
+            }, [grid, hWalls, vWalls, pairs, warps, labels, dim, historyIdx]);
+
+            const solveMaze = useCallback(() => {
+                if (!grid || grid.length === 0) return;
+                const s = new MazeSolver(grid, hWalls, vWalls, pairs, warps, solverOptions);
+                const r = s.solve();
+                setSolutions(r);
+                return r;
+            }, [grid, hWalls, vWalls, pairs, warps, solverOptions]);
+
+            const resetMaze = useCallback((w, h, skipHistory = false) => {
+                const newGrid = Array(h).fill(0).map(() => Array(w).fill(0).map(() => ({ isWall: false })));
+                const newHWalls = Array(h + 1).fill(0).map(() => Array(w).fill(false));
+                const newVWalls = Array(h).fill(0).map(() => Array(w + 1).fill(false));
+                const newPairs = [{ id: Date.now(), start: null, goal: null, requiredCells: [], color: COLORS[0], mode: PATH_MODES.SHORTEST, moveRule: MOVE_RULES.FREE }];
+                const newLabels = [];
+                const newWarps = [];
+                setGrid(newGrid); setHWalls(newHWalls); setVWalls(newVWalls); setPairs(newPairs); setWarps(newWarps); setLabels(newLabels);
+                setSolutions({}); setDim({ w, h }); setTargetDim({ w, h }); setPendingWarp(null);
+                if (!skipHistory) {
+                    saveHistory({ grid: newGrid, hWalls: newHWalls, vWalls: newVWalls, pairs: newPairs, warps: newWarps, labels: newLabels, dim: { w, h } });
+                } else {
+                    const snapshot = JSON.stringify({ grid: newGrid, hWalls: newHWalls, vWalls: newVWalls, pairs: newPairs, warps: newWarps, labels: newLabels, dim: { w, h } });
+                    setHistory([snapshot]);
+                    setHistoryIdx(0);
+                }
+                setStatusMsg("初期化完了");
+            }, [saveHistory]);
+
+            useEffect(() => { if (isAutoSolve && grid.length > 0) solveMaze(); }, [grid, hWalls, vWalls, pairs, warps, labels, solverOptions, isAutoSolve, solveMaze]);
+
+            const undo = () => {
+                if (historyIdx > 0 && history[historyIdx - 1]) {
+                    try {
+                        const prevState = JSON.parse(history[historyIdx - 1]);
+                        setGrid(prevState.grid); setHWalls(prevState.hWalls); setVWalls(prevState.vWalls);
+                        setPairs(prevState.pairs); setWarps(prevState.warps); setLabels(prevState.labels || []); setDim(prevState.dim); setTargetDim(prevState.dim);
+                        setHistoryIdx(historyIdx - 1); setSolutions({});
+                    } catch (err) { console.error("Undo failed:", err); }
+                }
+            };
+
+            const redo = () => {
+                if (historyIdx < history.length - 1 && history[historyIdx + 1]) {
+                    try {
+                        const nextState = JSON.parse(history[historyIdx + 1]);
+                        setGrid(nextState.grid); setHWalls(nextState.hWalls); setVWalls(nextState.vWalls);
+                        setPairs(nextState.pairs); setWarps(nextState.warps); setLabels(nextState.labels || []); setDim(nextState.dim); setTargetDim(nextState.dim);
+                        setHistoryIdx(historyIdx + 1); setSolutions({});
+                    } catch (err) { console.error("Redo failed:", err); }
+                }
+            };
+
+            const applyResize = () => {
+                const { w: newW, h: newH } = targetDim; const oldW = dim.w, oldH = dim.h;
+                const newGrid = Array(newH).fill(0).map((_, r) => Array(newW).fill(0).map((_, c) => (r < oldH && c < oldW) ? { ...grid[r][c] } : { isWall: false }));
+                const newHWalls = Array(newH + 1).fill(0).map((_, r) => Array(newW).fill(0).map((_, c) => (r <= oldH && c < oldW) ? hWalls[r][c] : false));
+                const newVWalls = Array(newH).fill(0).map((_, r) => Array(newW + 1).fill(0).map((_, c) => (r < oldH && c <= oldW) ? vWalls[r][c] : false));
+                const filterOOB = (p) => p && p.r < newH && p.c < newW;
+                const newPairs = pairs.map(p => ({ ...p, start: filterOOB(p.start) ? p.start : null, goal: filterOOB(p.goal) ? p.goal : null, requiredCells: p.requiredCells.filter(filterOOB) }));
+                const newWarps = warps.filter(w => filterOOB(w.a) && filterOOB(w.b));
+                const newLabels = labels.filter(l => filterOOB(l));
+                setGrid(newGrid); setHWalls(newHWalls); setVWalls(newVWalls); setPairs(newPairs); setWarps(newWarps); setLabels(newLabels); setDim({ w: newW, h: newH });
+                setSolutions({}); saveHistory({ grid: newGrid, hWalls: newHWalls, vWalls: newVWalls, pairs: newPairs, warps: newWarps, labels: newLabels, dim: { w: newW, h: newH } });
+            };
+
+            // --- Export / Import / Download ---
+            const downloadState = () => {
+                const state = { grid, hWalls, vWalls, pairs, warps, labels, dim, version: '3.5.5' };
+                const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `maze_architect_${Date.now()}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+                setStatusMsg("エクスポートしました");
+            };
+
+            const importState = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        setGrid(data.grid); setHWalls(data.hWalls); setVWalls(data.vWalls);
+                        setPairs(data.pairs); setWarps(data.warps); setLabels(data.labels || []);
+                        setDim(data.dim); setTargetDim(data.dim);
+                        setSolutions({});
+                        saveHistory(data);
+                        setStatusMsg("データをインポートしました");
+                    } catch (err) {
+                        console.error("Import failed", err);
+                        setStatusMsg("インポートに失敗しました");
+                    }
+                };
+                reader.readAsText(file);
+                e.target.value = null;
+            };
+
+            const downloadImage = () => {
+                if (!mazeContainerRef.current) return;
+                setStatusMsg("画像を生成中...");
+                html2canvas(mazeContainerRef.current, {
+                    backgroundColor: '#f8fafc',
+                    scale: 2,
+                    logging: false,
+                    useCORS: true
+                }).then(canvas => {
+                    const link = document.createElement('a');
+                    link.download = `maze_${Date.now()}.png`;
+                    link.href = canvas.toDataURL('image/png');
+                    link.click();
+                    setStatusMsg("画像を保存しました");
+                }).catch(err => {
+                    console.error("Export image failed", err);
+                    setStatusMsg("画像の保存に失敗しました");
+                });
+            };
+
+            const canPlaceAttribute = (type, r, c, pairIdx, dragging = null) => {
+                if (grid[r][c].isWall) return false;
+                if (type === 'label' || dragging?.type === 'label') return true;
+                const existingWarp = warps.find((w, idx) => {
+                    if (dragging?.type === 'warp' && dragging?.warpIdx === idx) return false;
+                    return (w.a.r === r && w.a.c === c) || (w.b.r === r && w.b.c === c);
+                });
+                if (existingWarp && (type === 'start' || type === 'goal' || type === 'warp')) return false;
+                if (pairIdx !== undefined && pairs[pairIdx]) {
+                    const p = pairs[pairIdx];
+                    const isConflictS = p.start?.r === r && p.start?.c === c && !(dragging?.type === 'start' && dragging?.pairIdx === pairIdx);
+                    const isConflictG = p.goal?.r === r && p.goal?.c === c && !(dragging?.type === 'goal' && dragging?.pairIdx === pairIdx);
+                    const isConflictCP = p.requiredCells.some((cp, cpIdx) => cp.r === r && cp.c === c && !(dragging?.type === 'cp' && dragging?.pairIdx === pairIdx && dragging?.cpIndex === cpIdx));
+                    if (isConflictS || isConflictG || isConflictCP) return false;
+                }
+                return true;
+            };
+
+            const handleCellWall = (r, c, e, initial = false) => {
+                if (r < 0 || r >= dim.h || c < 0 || c >= dim.w) return;
+                const processWall = () => {
+                    const hasAttr = pairs.some(p => (p.start?.r === r && p.start?.c === c) || (p.goal?.r === r && p.goal?.c === c) || p.requiredCells.some(cp => cp.r === r && cp.c === c)) || warps.some(w => (w.a.r === r && w.a.c === c) || (w.b.r === r && w.b.c === c)) || labels.some(l => l.r === r && l.c === c);
+                    if (!grid[r][c].isWall && hasAttr) return;
+                    const newGrid = [...grid.map(row => [...row])];
+                    if (initial) { 
+                        const currentMode = grid[r][c].isWall ? 'remove' : 'add'; 
+                        setDragMode(currentMode); 
+                        newGrid[r][c].isWall = currentMode === 'add'; 
+                    } else if (dragMode) { 
+                        newGrid[r][c].isWall = dragMode === 'add'; 
+                    }
+                    setGrid(newGrid);
+                };
+
+                if (initial) {
+                    if (clickTimer.current) {
+                        clearTimeout(clickTimer.current);
+                        clickTimer.current = null;
+                        pendingWallAction.current = null;
+                        return;
+                    }
+                    pendingWallAction.current = processWall;
+                    clickTimer.current = setTimeout(() => {
+                        if (pendingWallAction.current) { pendingWallAction.current(); pendingWallAction.current = null; }
+                        clickTimer.current = null;
+                    }, 250);
+                } else if (dragMode) { processWall(); }
+            };
+
+            const handleBorderWall = (type, r, c, initial = false) => {
+                const updatedHWalls = [...hWalls.map(row=>[...row])];
+                const updatedVWalls = [...vWalls.map(row=>[...row])];
+                if (initial) { const mode = (type === 'h' ? hWalls[r][c] : vWalls[r][c]) ? 'remove' : 'add'; setDragMode(mode); if (type === 'h') updatedHWalls[r][c] = mode === 'add'; else updatedVWalls[r][c] = mode === 'add'; }
+                else if (dragMode) { if (type === 'h') updatedHWalls[r][c] = dragMode === 'add'; else updatedVWalls[r][c] = dragMode === 'add'; }
+                setHWalls(updatedHWalls); setVWalls(updatedVWalls);
+            };
+
+            const setAttribute = (type, r, c, from = null) => {
+                const nextPairs = [...pairs.map(p => ({ ...p, requiredCells: [...p.requiredCells] }))];
+                const nextWarps = [...warps];
+                const nextLabels = [...labels];
+                const activeIdx = from ? (from.pairIdx !== undefined ? from.pairIdx : activePairIdx) : activePairIdx;
+                
+                if (!canPlaceAttribute(type, r, c, activeIdx, from)) return;
+
+                if (from) {
+                    if (from.type === 'start') nextPairs[from.pairIdx].start = null;
+                    if (from.type === 'goal') nextPairs[from.pairIdx].goal = null;
+                    if (from.type === 'label') { const target = nextLabels[from.labelIdx]; target.r = r; target.c = c; }
+                }
+
+                if (type === 'warp') {
+                    if (from && from.type === 'warp') { const warp = nextWarps[from.warpIdx]; if (from.end === 'a') warp.a = { r, c }; else warp.b = { r, c }; }
+                    else if (!pendingWarp) { setPendingWarp({ r, c }); setStatusMsg("ワープ出口を選択"); }
+                    else { if (pendingWarp.r !== r || pendingWarp.c !== c) { nextWarps.push({ a: { ...pendingWarp }, b: { r, c }, id: Date.now() }); } setPendingWarp(null); }
+                } else if (type === 'label' && !from) { setEditingLabel({ r, c, text: '', isNew: true }); }
+                else if (type !== 'label') {
+                    const activePair = nextPairs[activeIdx];
+                    if (type === 'start') activePair.start = { r, c };
+                    else if (type === 'goal') activePair.goal = { r, c };
+                    else if (type === 'cp') {
+                        if (from && from.type === 'cp' && from.cpIndex !== undefined) {
+                            activePair.requiredCells[from.cpIndex] = { r, c };
+                        } else {
+                            activePair.requiredCells.push({ r, c });
+                        }
+                    }
+                }
+                setPairs(nextPairs); setWarps(nextWarps); setLabels(nextLabels); setContextMenu(null);
+                saveHistory({ grid, hWalls, vWalls, pairs: nextPairs, warps: nextWarps, labels: nextLabels, dim });
+            };
+
+            const saveLabel = (text) => {
+                const nextLabels = [...labels];
+                if (editingLabel.isNew) { nextLabels.push({ r: editingLabel.r, c: editingLabel.c, text, id: Date.now() }); }
+                else { const idx = labels.findIndex(l => l.id === editingLabel.id); if (idx !== -1) nextLabels[idx].text = text; }
+                setLabels(nextLabels); setEditingLabel(null);
+                saveHistory({ grid, hWalls, vWalls, pairs, warps, labels: nextLabels, dim });
+            };
+
+            const removeSpecificAttribute = (attr) => {
+                const nextPairs = [...pairs.map(p => ({ ...p, requiredCells: [...p.requiredCells] }))];
+                const nextWarps = [...warps];
+                const nextLabels = [...labels];
+                if (attr.type === 'start') nextPairs[attr.pairIdx].start = null;
+                else if (attr.type === 'goal') nextPairs[attr.pairIdx].goal = null;
+                else if (attr.type === 'cp') {
+                    nextPairs[attr.pairIdx].requiredCells = nextPairs[attr.pairIdx].requiredCells.filter((c, idx) => idx !== attr.cpIndex);
+                }
+                else if (attr.type === 'warp') nextWarps.splice(attr.warpIdx, 1);
+                else if (attr.type === 'label') nextLabels.splice(attr.labelIdx, 1);
+                setPairs(nextPairs); setWarps(nextWarps); setLabels(nextLabels); setContextMenu(null);
+                saveHistory({ grid, hWalls, vWalls, pairs: nextPairs, warps: nextWarps, labels: nextLabels, dim });
+            };
+
+            const removeAllAttributes = (r, c) => {
+                const nextPairs = [...pairs.map(p => ({ ...p, requiredCells: [...p.requiredCells] }))];
+                const nextWarps = [...warps];
+                const nextLabels = labels.filter(l => l.r !== r || l.c !== c);
+                nextPairs.forEach(p => {
+                    if (p.start?.r === r && p.start?.c === c) p.start = null;
+                    if (p.goal?.r === r && p.goal?.c === c) p.goal = null;
+                    p.requiredCells = p.requiredCells.filter(cp => cp.r !== r || cp.c !== c);
+                });
+                for (let i = nextWarps.length - 1; i >= 0; i--) { const w = nextWarps[i]; if ((w.a.r === r && w.a.c === c) || (w.b.r === r && w.b.c === c)) nextWarps.splice(i, 1); }
+                setPairs(nextPairs); setWarps(nextWarps); setLabels(nextLabels); setContextMenu(null);
+                saveHistory({ grid, hWalls, vWalls, pairs: nextPairs, warps: nextWarps, labels: nextLabels, dim });
+            };
+
+            const handleWheel = (e) => { const scaleDelta = e.deltaY > 0 ? 0.9 : 1.1; const newScale = Math.min(Math.max(viewTransform.scale * scaleDelta, 0.2), 4); setViewTransform(prev => ({ ...prev, scale: newScale })); };
+            const handleMouseDown = (e) => { if (e.button === 1) { setIsPanning(true); setPanStart({ x: e.clientX - viewTransform.x, y: e.clientY - viewTransform.y }); } else if (e.button === 0) setContextMenu(null); };
+            const handleMouseMove = (e) => { 
+                setMousePos({ x: e.clientX, y: e.clientY }); 
+                if (isPanning) { setViewTransform(prev => ({ ...prev, x: e.clientX - panStart.x, y: e.clientY - panStart.y })); } 
+                else if (isDragging && dragType === 'cell' && clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; if (pendingWallAction.current) { pendingWallAction.current(); pendingWallAction.current = null; } }
+            };
+            const handleMouseUp = (e) => {
+                if (isDragging) saveHistory();
+                setIsPanning(false); setIsDragging(false); setDragMode(null); setDragType(null);
+                if (draggedAttr) {
+                    const elements = document.elementsFromPoint(e.clientX, e.clientY);
+                    const cellEl = elements.find(el => el.dataset.cellPos);
+                    if (cellEl) { const [r, c] = cellEl.dataset.cellPos.split(',').map(Number); setAttribute(draggedAttr.type, r, c, draggedAttr); }
+                    setDraggedAttr(null);
+                }
+            };
+
+            const onCellContextMenu = (e, r, c) => {
+                e.preventDefault();
+                const cellAttrs = [];
+                pairs.forEach((p, i) => {
+                    if (p.start?.r === r && p.start?.c === c) cellAttrs.push({ type: 'start', pairIdx: i, label: `ペア${i+1} 開始`, color: p.color, r, c });
+                    if (p.goal?.r === r && p.goal?.c === c) cellAttrs.push({ type: 'goal', pairIdx: i, label: `ペア${i+1} 終了`, color: p.color, r, c });
+                    p.requiredCells.forEach((cp, cpIdx) => { if (cp.r === r && cp.c === c) cellAttrs.push({ type: 'cp', pairIdx: i, cpIndex: cpIdx, label: `ペア${i+1} CP${cpIdx+1}`, color: p.color, r, c }); });
+                });
+                warps.forEach((w, i) => {
+                    if (w.a.r === r && w.a.c === c) cellAttrs.push({ type: 'warp', end: 'a', warpIdx: i, label: `ワープW${i+1}(A)`, color: '#06b6d4', r, c });
+                    if (w.b.r === r && w.b.c === c) cellAttrs.push({ type: 'warp', end: 'b', warpIdx: i, label: `ワープW${i+1}(B)`, color: '#06b6d4', r, c });
+                });
+                labels.forEach((l, i) => { if (l.r === r && l.c === c) cellAttrs.push({ type: 'label', labelIdx: i, label: `ラベル: ${l.text}`, color: '#64748b', r, c }); });
+                setContextMenu({ x: e.clientX, y: e.clientY, r, c, attrs: cellAttrs });
+            };
+
+            const getCellContent = (r, c) => {
+                const els = [];
+                pairs.forEach((p, idx) => {
+                    if (p.start?.r === r && p.start?.c === c) { const isDraggingSelf = draggedAttr?.type === 'start' && draggedAttr?.pairIdx === idx; els.push(<div key={`s-${idx}`} onMouseDown={(e) => { e.stopPropagation(); setDraggedAttr({type: 'start', pairIdx: idx, r, c}) }} className={`w-6 h-6 rounded-full border-2 border-white shadow flex items-center justify-center text-[9px] font-black text-white z-[50] cursor-grab active:cursor-grabbing ${isDraggingSelf ? 'opacity-20' : ''}`} style={{backgroundColor: p.color}}>S{idx+1}</div>); }
+                    if (p.goal?.r === r && p.goal?.c === c) { const isDraggingSelf = draggedAttr?.type === 'goal' && draggedAttr?.pairIdx === idx; els.push(<div key={`g-${idx}`} onMouseDown={(e) => { e.stopPropagation(); setDraggedAttr({type: 'goal', pairIdx: idx, r, c}) }} className={`w-6 h-6 rounded-full border-2 border-white shadow flex items-center justify-center text-[9px] font-black text-white z-[50] cursor-grab active:cursor-grabbing ${isDraggingSelf ? 'opacity-20' : ''}`} style={{backgroundColor: p.color}}>G{idx+1}</div>); }
+                    p.requiredCells.forEach((cp, cpIdx) => { if (cp.r === r && cp.c === c) { const isDraggingSelf = draggedAttr?.type === 'cp' && draggedAttr?.pairIdx === idx && draggedAttr?.cpIndex === cpIdx; els.push(<div key={`cp-${idx}-${cpIdx}`} onMouseDown={(e) => { e.stopPropagation(); setDraggedAttr({type: 'cp', pairIdx: idx, cpIndex: cpIdx, r, c}) }} className={`w-5 h-5 rotate-45 border border-white shadow z-[50] cursor-grab active:cursor-grabbing flex items-center justify-center ${isDraggingSelf ? 'opacity-20' : ''}`} style={{backgroundColor: p.color}}><span className="-rotate-45 text-[8px] text-white font-bold">{cpIdx+1}</span></div>); } });
+                });
+                warps.forEach((w, warpIdx) => { let end = (w.a.r === r && w.a.c === c) ? 'a' : (w.b.r === r && w.b.c === c) ? 'b' : null; if (end) { const isDraggingSelf = draggedAttr?.type === 'warp' && draggedAttr?.warpIdx === warpIdx && draggedAttr.end === end; els.push(<div key={`w-${warpIdx}-${end}`} onMouseDown={(e) => { e.stopPropagation(); setDraggedAttr({type: 'warp', warpIdx, end, r, c}) }} className={`w-6 h-6 rounded bg-cyan-500 border-2 border-white text-[9px] text-white font-black flex items-center justify-center z-[50] cursor-grab active:cursor-grabbing ${isDraggingSelf ? 'opacity-20' : ''}`}>W{warpIdx+1}</div>); } });
+                labels.forEach((l, labelIdx) => { if (l.r === r && l.c === c) { const isDraggingSelf = draggedAttr?.type === 'label' && draggedAttr?.labelIdx === labelIdx; els.push(<div key={`l-${l.id}`} onMouseDown={(e) => { e.stopPropagation(); setDraggedAttr({type: 'label', labelIdx, r, c}) }} className={`w-6 h-6 rounded bg-slate-500 border border-white text-[10px] text-white font-bold flex items-center justify-center z-[50] cursor-grab active:cursor-grabbing tooltip ${isDraggingSelf ? 'opacity-20' : ''}`}>{l.text ? l.text[0] : '?'}<span className="tooltiptext">{l.text}</span></div>); } });
+                if (pendingWarp?.r === r && pendingWarp?.c === c) els.push(<div key="pw" className="w-6 h-6 rounded bg-cyan-700 animate-pulse z-[50]" />);
+                return els;
+            };
+
+            const renderPath = (pairId) => {
+                const solList = solutions[pairId]; if (!solList || solList.length === 0) return null;
+                const pair = pairs.find(p => p.id === pairId);
+                return solList.map((path, pIdx) => {
+                    const segments = [];
+                    let currentSegment = [path[0]];
+                    for (let i = 1; i < path.length; i++) { const curr = path[i]; if (curr.jump && curr.via) { currentSegment.push(curr.via); segments.push(currentSegment); currentSegment = [curr]; } else { currentSegment.push(curr); } }
+                    segments.push(currentSegment);
+                    return (<g key={`${pairId}-${pIdx}`} opacity={pIdx === 0 ? "0.6" : "0.2"} style={{ zIndex: 10 }}>{segments.map((seg, si) => (<polyline key={si} points={seg.map(p => `${p.c * CELL_SIZE + CELL_SIZE/2},${p.r * CELL_SIZE + CELL_SIZE/2}`).join(' ')} fill="none" stroke={pair.color} strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />))}</g>);
+                });
+            };
+
+            const getStats = (pairId) => {
+                const sol = solutions[pairId];
+                if (!sol || sol.length === 0) return '経路なし';
+                const count = sol.length >= solverOptions.maxSolutions ? `${solverOptions.maxSolutions}+` : sol.length.toString();
+                let totalSteps = 0;
+                const path = sol[0];
+                for (let i = 1; i < path.length; i++) { totalSteps += (path[i].stepCount || 1); }
+                return `${count}種 (距離: ${totalSteps})`;
+            };
+
+            const handleDoubleClick = (r, c) => { 
+                const label = labels.find(l => l.r === r && l.c === c); 
+                if (label) { setEditingLabel({ ...label, isNew: false }); } 
+                else { setEditingLabel({ r, c, text: '', isNew: true }); } 
+            };
+
+            return (
+                <div className="flex flex-col h-screen no-select overflow-hidden bg-slate-200" onContextMenu={e => e.preventDefault()}>
+                    <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={importState} />
+                    
+                    {draggedAttr && (
+                        <div className="dragging-ghost" style={{ left: mousePos.x, top: mousePos.y }}>
+                             <div className="w-8 h-8 rounded-full border-2 border-white shadow-xl flex items-center justify-center text-[11px] font-black text-white" style={{backgroundColor: draggedAttr.type === 'warp' ? '#06b6d4' : (draggedAttr.type === 'label' ? '#64748b' : (pairs[draggedAttr.pairIdx]?.color || '#000'))}}>
+                                {draggedAttr.type === 'start' ? 'S' : draggedAttr.type === 'goal' ? 'G' : draggedAttr.type === 'cp' ? 'CP' : (draggedAttr.type === 'label' ? 'L' : 'W')}
+                             </div>
+                        </div>
+                    )}
+                    {editingLabel && (
+                        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[10000]">
+                            <div className="bg-white p-6 rounded-2xl shadow-2xl w-80 modal-animate">
+                                <h3 className="text-sm font-black text-slate-800 mb-4 uppercase tracking-wider">ラベル編集</h3>
+                                <input autoFocus className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none mb-4 font-bold" value={editingLabel.text} onChange={e => setEditingLabel({...editingLabel, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveLabel(editingLabel.text); if(e.key === 'Escape') setEditingLabel(null); }} placeholder="テキストを入力..." />
+                                <div className="flex gap-2">
+                                    <button onClick={() => saveLabel(editingLabel.text)} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg font-bold text-xs transition-colors">保存</button>
+                                    <button onClick={() => setEditingLabel(null)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 py-2 rounded-lg font-bold text-xs transition-colors">キャンセル</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    <header className="bg-white border-b px-4 py-3 flex items-center justify-between shadow-sm z-50">
+                        <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-3 pr-4 border-r">
+                                <div className="bg-indigo-600 p-1.5 rounded-lg text-white shadow-sm"><Icon name="Grid" size={18} /></div>
+                                <h1 className="text-base font-black tracking-tight text-slate-800">Maze Architect Pro <span className="text-[10px] text-indigo-400 font-bold ml-1">v3.5.5</span></h1>
+                            </div>
+                            <div className="flex gap-1 bg-slate-50 p-1 rounded-md border">
+                                <button onClick={undo} disabled={historyIdx <= 0} className="p-2 hover:bg-white rounded disabled:opacity-20 transition-all"><Icon name="Undo2" size={16}/></button>
+                                <button onClick={redo} disabled={historyIdx >= history.length - 1} className="p-2 hover:bg-white rounded disabled:opacity-20 transition-all"><Icon name="Redo2" size={16}/></button>
+                            </div>
+                            <div className="flex gap-1 border-l pl-4 ml-2">
+                                <button onClick={downloadState} className="p-2 hover:bg-slate-100 rounded-md text-slate-600 tooltip"><Icon name="Download" size={18}/><span className="tooltiptext">エクスポート</span></button>
+                                <button onClick={() => fileInputRef.current.click()} className="p-2 hover:bg-slate-100 rounded-md text-slate-600 tooltip"><Icon name="Upload" size={18}/><span className="tooltiptext">インポート</span></button>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            {!isAutoSolve && (
+                                <button onClick={solveMaze} className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl font-black transition-all text-xs uppercase tracking-widest"><Icon name="Play" size={14} /> 求解</button>
+                            )}
+                            <button onClick={downloadImage} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-xl font-black transition-all shadow-md active:scale-95 text-xs uppercase tracking-widest">
+                                <Icon name="Camera" size={14} fill="white" /> 画像で保存
+                            </button>
+                        </div>
+                    </header>
+                    <div className="flex flex-1 overflow-hidden relative">
+                        <aside className={`bg-white border-r relative flex flex-col overflow-y-auto transition-all duration-300 z-40 shadow-sm ${isSidebarOpen ? 'w-80' : 'w-0'}`}>
+                            {isSidebarOpen && (
+                                <button onClick={() => setIsSidebarOpen(false)} className="sidebar-toggle-btn p-1.5 hover:bg-slate-100 rounded-md text-slate-400 transition-colors">
+                                    <Icon name="ChevronLeft" size={18} />
+                                </button>
+                            )}
+                            <div className={`min-w-[320px] p-4 flex flex-col h-full ${!isSidebarOpen && 'invisible'}`}>
+                                <div className="flex-1 overflow-y-auto pb-4">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">探索設定</h2>
+                                        <button onClick={() => { const n = [...pairs, { id: Date.now(), start: null, goal: null, requiredCells: [], color: COLORS[pairs.length % COLORS.length], mode: PATH_MODES.SHORTEST, moveRule: MOVE_RULES.FREE }]; setPairs(n); setActivePairIdx(n.length-1); }} className="bg-indigo-50 text-indigo-600 hover:bg-indigo-100 p-1.5 rounded-md transition-colors mr-10"><Icon name="Plus" size={16} /></button>
+                                    </div>
+                                    <div className="space-y-3">
+                                        {pairs.map((p, i) => (
+                                            <div key={p.id} onClick={() => setActivePairIdx(i)} className={`p-3 rounded-2xl border-2 transition-all cursor-pointer ${activePairIdx === i ? 'border-indigo-400 bg-indigo-50/20 shadow-sm' : 'border-slate-100 bg-slate-50 hover:bg-slate-100'}`}>
+                                                <div className="flex items-center justify-between mb-2"><div className="flex items-center gap-2 font-black text-[10px] uppercase"><div className="w-2.5 h-2.5 rounded-full" style={{backgroundColor:p.color}}/>ペア {i+1}</div><button onClick={(e) => {e.stopPropagation(); if(pairs.length > 1) { setPairs(pairs.filter((_, idx)=>idx!==i)); setActivePairIdx(0); }}} className="text-slate-300 hover:text-red-500"><Icon name="Trash2" size={12}/></button></div>
+                                                <div className="grid grid-cols-2 gap-2 mb-2"><select className="text-[10px] p-1.5 rounded border bg-white font-bold outline-none" value={p.moveRule} onChange={(e)=>{const n=[...pairs]; n[i].moveRule=e.target.value; setPairs(n);}}>{Object.values(MOVE_RULES).map(v=><option key={v} value={v}>{v}</option>)}</select><select className="text-[10px] p-1.5 rounded border bg-white font-bold outline-none" value={p.mode} onChange={(e)=>{const n=[...pairs]; n[i].mode=e.target.value; setPairs(n);}}>{Object.values(PATH_MODES).map(v=><option key={v} value={v}>{v}</option>)}</select></div>
+                                                <div className="pt-2 border-t border-slate-200/50 flex justify-between items-center"><span className="text-[9px] font-black text-slate-400 uppercase">統計:</span><span className="text-[10px] font-black text-indigo-600">{getStats(p.id)}</span></div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="space-y-4 pt-4 border-t border-slate-100">
+                                    <div className="flex items-center justify-between px-1">
+                                        <div className="flex flex-col"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">常時求解</span><span className="text-[8px] text-slate-400 font-bold italic">盤面変更で自動計算</span></div>
+                                        <label className="switch"><input type="checkbox" checked={isAutoSolve} onChange={(e) => setIsAutoSolve(e.target.checked)} /><span className="slider"></span></label>
+                                    </div>
+                                    <div className="p-3 bg-slate-50 rounded-2xl space-y-3">
+                                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">盤面サイズ変更</h3>
+                                        <div className="flex items-center gap-2">
+                                            <div className="flex-1"><span className="text-[8px] text-slate-400 font-bold block mb-1">高さ</span><input type="number" className="w-full text-xs border-2 rounded-lg p-2 text-center font-black" value={targetDim.h} onChange={(e)=>setTargetDim({...targetDim, h: parseInt(e.target.value)||1})}/></div>
+                                            <span className="mt-4 font-black text-slate-300">×</span>
+                                            <div className="flex-1"><span className="text-[8px] text-slate-400 font-bold block mb-1">幅</span><input type="number" className="w-full text-xs border-2 rounded-lg p-2 text-center font-black" value={targetDim.w} onChange={(e)=>setTargetDim({...targetDim, w: parseInt(e.target.value)||1})}/></div>
+                                        </div>
+                                        <div className="flex gap-2 pt-1"><button onClick={applyResize} className="flex-1 py-2 bg-slate-800 hover:bg-black text-white rounded-lg text-[10px] font-black uppercase transition-all">適用</button><button onClick={() => resetMaze(dim.w, dim.h)} className="p-2 bg-red-100 hover:bg-red-200 text-red-600 rounded-lg"><Icon name="RotateCcw" size={16}/></button></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </aside>
+
+                        {!isSidebarOpen && (
+                            <button onClick={() => setIsSidebarOpen(true)} className="fixed top-20 left-4 z-50 p-2 bg-white shadow-md rounded-full text-slate-600 hover:bg-indigo-50 transition-all border border-indigo-100">
+                                <Icon name="ChevronRight" size={20} />
+                            </button>
+                        )}
+
+                        <main ref={workspaceRef} className="flex-1 relative overflow-hidden bg-slate-200 cursor-crosshair" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
+                            <div className="absolute transition-transform duration-75 ease-out" style={{ transform: `translate(${viewTransform.x}px, ${viewTransform.y}px) scale(${viewTransform.scale})`, top: '10%', left: '10%' }}>
+                                <div ref={mazeContainerRef} className="relative shadow-2xl bg-white p-6 border-2 border-slate-300 rounded-xl">
+                                    <div className="relative inline-block border-4 border-slate-900 bg-slate-50">
+                                        <svg className="absolute inset-0 pointer-events-none w-full h-full overflow-visible" style={{zIndex: 10}}>{Object.keys(solutions).map(pid => renderPath(Number(pid)))}</svg>
+                                        
+                                        {grid.map((row, r) => (<div key={r} className="flex">{row.map((cell, c) => (<div key={c} data-cell-pos={`${r},${c}`} className={`w-8 h-8 border border-slate-200 relative flex items-center justify-center transition-colors ${cell.isWall ? 'bg-slate-800 border-slate-700' : 'bg-white hover:bg-slate-50'}`} onMouseDown={(e) => { if(e.button === 0 && !draggedAttr) { handleCellWall(r, c, e, true); setIsDragging(true); setDragType('cell'); } }} onMouseEnter={() => { if(isDragging && dragType === 'cell') handleCellWall(r, c, null); }} onContextMenu={(e) => onCellContextMenu(e, r, c)} onDoubleClick={() => handleDoubleClick(r, c)}>{getCellContent(r, c)}</div>))}</div>))}
+                                        
+                                        {hWalls.map((row, r) => row.map((isW, c) => (<div key={`h-${r}-${c}`} className="absolute z-40 group" style={{ top: r * CELL_SIZE, left: c * CELL_SIZE + (CELL_SIZE * 0.1), width: CELL_SIZE * 0.8, height: WALL_THICKNESS, transform: 'translateY(-50%)', cursor: 'pointer' }} onMouseDown={(e) => { if(e.button===0) { e.stopPropagation(); setIsDragging(true); setDragType('border'); handleBorderWall('h', r, c, true); } }} onMouseEnter={() => { if(isDragging && dragType === 'border') handleBorderWall('h', r, c); }} ><div className={`border-visual transition-colors ${isW ? 'bg-red-500 shadow-sm' : 'group-hover:bg-red-400/20'}`} style={{ width: CELL_SIZE + WALL_THICKNESS, height: WALL_THICKNESS, left: -(CELL_SIZE * 0.1 + WALL_THICKNESS / 2), top: 0 }} /></div>)))}
+                                        {vWalls.map((row, r) => row.map((isW, c) => (<div key={`v-${r}-${c}`} className="absolute z-40 group" style={{ left: c * CELL_SIZE, top: r * CELL_SIZE + (CELL_SIZE * 0.1), height: CELL_SIZE * 0.8, width: WALL_THICKNESS, transform: 'translateX(-50%)', cursor: 'pointer' }} onMouseDown={(e) => { if(e.button===0) { e.stopPropagation(); setIsDragging(true); setDragType('border'); handleBorderWall('v', r, c, true); } }} onMouseEnter={() => { if(isDragging && dragType === 'border') handleBorderWall('v', r, c); }} ><div className={`border-visual transition-colors ${isW ? 'bg-red-500 shadow-sm' : 'group-hover:bg-red-400/20'}`} style={{ height: CELL_SIZE + WALL_THICKNESS, width: WALL_THICKNESS, top: -(CELL_SIZE * 0.1 + WALL_THICKNESS / 2), left: 0 }} /></div>)))}
+                                        
+                                        <svg className="absolute inset-0 pointer-events-none w-full h-full overflow-visible z-5 opacity-30">{warps.map(w => <line key={w.id} x1={w.a.c*CELL_SIZE+CELL_SIZE/2} y1={w.a.r*CELL_SIZE+CELL_SIZE/2} x2={w.b.c*CELL_SIZE+CELL_SIZE/2} y2={w.b.r*CELL_SIZE+CELL_SIZE/2} stroke="cyan" strokeWidth="2" strokeDasharray="4 2" />)}</svg>
+                                    </div>
+                                </div>
+                            </div>
+                            {contextMenu && (
+                                <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(e) => e.stopPropagation()}>
+                                    <div className="context-menu-header">属性を追加</div>
+                                    <div className="context-menu-item" onClick={() => setAttribute('start', contextMenu.r, contextMenu.c)}><div className="w-3 h-3 rounded-full bg-green-500" /> スタート</div>
+                                    <div className="context-menu-item" onClick={() => setAttribute('goal', contextMenu.r, contextMenu.c)}><div className="w-3 h-3 rounded-full bg-red-500" /> ゴール</div>
+                                    <div className="context-menu-item" onClick={() => setAttribute('cp', contextMenu.r, contextMenu.c)}><div className="w-3 h-3 rotate-45 bg-yellow-400" /> 必須マス</div>
+                                    <div className="context-menu-item" onClick={() => setAttribute('warp', contextMenu.r, contextMenu.c)}><div className="w-3 h-3 rounded bg-cyan-500" /> ワープ</div>
+                                    <div className="context-menu-item" onClick={() => setAttribute('label', contextMenu.r, contextMenu.c)}><div className="w-3 h-3 rounded bg-slate-500" /> ラベル</div>
+                                    {contextMenu.attrs.length > 0 && (<><div className="context-menu-divider"></div><div className="context-menu-header">属性を削除</div>{contextMenu.attrs.map((attr, idx) => (<div key={idx} className="context-menu-item text-red-600" onClick={() => removeSpecificAttribute(attr)}><div className="w-2.5 h-2.5 rounded-full" style={{backgroundColor: attr.color}} /> {attr.label}を削除</div>))}<div className="context-menu-divider"></div><div className="context-menu-item text-red-800 font-black uppercase text-[10px]" onClick={() => removeAllAttributes(contextMenu.r, contextMenu.c)}><Icon name="Trash2" size={14} /> マスの全属性を削除</div></>)}
+                                </div>
+                            )}
+                        </main>
+                        <footer className="absolute bottom-0 left-0 right-0 bg-slate-900 text-white px-4 py-2 flex items-center justify-between z-50 shadow-lg text-[9px] font-black uppercase tracking-widest border-t border-slate-700">
+                            <div className="flex items-center gap-6"><div className="flex items-center gap-2"><div className={`w-1.5 h-1.5 rounded-full animate-pulse ${isAutoSolve ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.5)]' : 'bg-slate-500'}`} />SYSTEM: {statusMsg || (isAutoSolve ? 'AUTO_SOLVING' : 'MANUAL')}</div><div className="flex items-center gap-3 border-l border-slate-700 pl-4 opacity-60"><Icon name="MousePointer2" size={12}/><span>左ドラッグ: 壁 | アイコンドラッグ: 移動 | 右クリック: 設定 | ダブルクリック: ラベル</span></div></div>
+                            <div className="flex items-center gap-4 opacity-60"><span>GRID: {dim.w}x{dim.h}</span><span>ZOOM: {Math.round(viewTransform.scale * 100)}%</span></div>
+                        </footer>
+                    </div>
+                </div>
+            );
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
